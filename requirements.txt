@@ -1,0 +1,13 @@
+transformers
+tensorflow==1.15
+tqdm
+sklearn
+numpy
+matplotlib
+seaborn
+pandas
+sklearn
+deeppavlov
+stopwords
+umap-learn
+hdbscan
