@@ -160,14 +160,11 @@ def read_data_and_compute_embeds(path_to_train):
     bert_out.columns=['tokens', 'token_embs', 'subtokens', 'subtoken_embs', 'sent_max_embs', 'sent_mean_embs', 'bert_pooler_outputs']
     assert bert_tokens.shape[0]==train.shape[0]
     bert_out_1 = pd.concat([bert_out,train['target_word'].apply(lambda x: x[0])],axis=1)
-    bert_target_embs = bert_out_1.apply(find_target_embed,axis=1)
-    
+    bert_out_1['bert_target_embs'] = bert_out_1.apply(find_target_embed,axis=1)
     print(f'dropped {bert_target_embs.isna().sum()} instances: {bert_target_embs[bert_target_embs.isna()].index}')
-
-    train = train.loc[bert_target_embs.notna()]
-    bert_target_embs = bert_target_embs.loc[bert_target_embs.notna()]
-
-    return train, bert_target_embs
+    train = train.loc[bert_out_1['bert_target_embs'].notna()]
+    bert_out_1 = bert_out_1.loc[bert_out_1['bert_target_embs'].notna()]
+    return train, bert_out_1
 
 
 
@@ -186,17 +183,29 @@ def construct_weighted_graph(data):
     return g
 
 
-def make_chinese_whispers(data, **chinese_args):
+def make_chinese_whispers(data, **kwargs):
     g = construct_weighted_graph(data)
-    chinese_whispers(g, **chinese_args)
+    chinese_whispers(g, **kwargs)
     clusters = [g.nodes[i]['label'] for i in sorted(g.nodes)]
     return clusters
+
+
+
+def asyn_lpa_communities(data, **kwargs):
+    g = construct_weighted_graph(data)
+    clusters = nx.algorithms.community.label_propagation.asyn_lpa_communities(g, weight='weight')
+    a=list(enumerate(clusters))
+    b=list(itertools.chain(*[[ [x[0],i] for i in x[1] ]  for x in a ]))
+    c = [y[0] for y in sorted(b, key=lambda x: x[1])]
+    return c
+
 
 def evaluate(pred, target):
     return ari(pred, target)
 
 
-def make_dataset(train, bert_target_embs, **kwargs):
+def make_dataset(train, bert_out, **kwargs):
+    bert_target_embs = bert_out['bert_target_embs']
     datasets=[]
     distance, distance_name, less_is_closer = kwargs['distance_config']
     for word in train['word'].unique():
@@ -231,15 +240,6 @@ def make_dataset(train, bert_target_embs, **kwargs):
     return datasets
         
 
-
-# train_paths = ['/home/lsherstyuk/Documents/HSE_FTIAD/KR1/WSID_data/RUSSE2018/russe-wsi-kit/data/main/active-dict/train.csv',
-# '/home/lsherstyuk/Documents/HSE_FTIAD/KR1/WSID_data/RUSSE2018/russe-wsi-kit/data/main/bts-rnc/train.csv',
-# '/home/lsherstyuk/Documents/HSE_FTIAD/KR1/WSID_data/RUSSE2018/russe-wsi-kit/data/main/wiki-wiki/train.csv']
-# test_paths = ['/home/lsherstyuk/Documents/HSE_FTIAD/KR1/WSID_data/RUSSE2018/russe-wsi-kit/data/main/active-dict/test-solution.csv',
-# '/home/lsherstyuk/Documents/HSE_FTIAD/KR1/WSID_data/RUSSE2018/russe-wsi-kit/data/main/bts-rnc/test-solution.csv',
-# '/home/lsherstyuk/Documents/HSE_FTIAD/KR1/WSID_data/RUSSE2018/russe-wsi-kit/data/main/wiki-wiki/test-solution.csv']
-
-# dataset_names = ['active-dict','bts-rnc','wiki-wiki',]
 
 paths_config={
     'test':{
@@ -358,9 +358,6 @@ def run_maxmax():
         pkl.dump(train_results_2, f)
 
 
-if __name__=='__main__':
-    run_maxmax()    
-
 
 
 
@@ -418,4 +415,5 @@ def run_training(model_configs, make_model):
         pkl.dump(train_results_2, f)
 
 if __name__=='__main__':
-    run_training(maxmax_configs, maxmax_clustering)
+    # run_training(maxmax_configs, maxmax_clustering)
+    run_training({'algorithm':'label_prop', asyn_lpa_communities})
