@@ -15,4 +15,5 @@ def maxmax_clustering(graph):
     root_nodes = [x for x in g.nodes if g.nodes[x]['root']]
     clusters = {x:root for root in root_nodes for x in nx.descendants(g,root)}
     clusters.update({x:x for x in root_nodes})
-    return clusters
+    clusters_list= [y[1] for y in  sorted(list(clusters.items()),key = lambda x: x[0])]
+    return clusters_list

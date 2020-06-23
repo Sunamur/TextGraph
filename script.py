@@ -28,6 +28,9 @@ from sklearn.metrics import adjusted_rand_score, adjusted_mutual_info_score
 from nltk import word_tokenize
 import re
 from tqdm import tqdm, tqdm_pandas
+from maxmax import maxmax_clustering    
+
+
 tqdm_pandas(tqdm())
 russian_stopwords = stopwords.get_stopwords("russian")
 punctuation=[',','.',';',':','!','?','–','-']
@@ -119,9 +122,13 @@ dataset_configs={
 
 chinese_whispers_configs={
     'weighting':['top','lin','log'],
-    'iterations':[5,10,20,30,50]
+    'iterations':[5,10,20,30,50],
+    'algorithm':'ChineseWhispers'
 }
 
+maxmax_configs = {
+    'algorithm':'ChineseWhispers'
+}
 
 def clear_punctuation(x):
     re.sub(r'[^A-ZА-Яа-яa-z ]')
@@ -173,11 +180,14 @@ def find_knn(x,k=5,less_is_closer=False):
     # y[y>=thres]=1
     return y
 
+def construct_weighted_graph(data):
+    g = nx.from_edgelist(data.loc[:,['variable','index']].values,create_using=nx.DiGraph)
+    nx.set_edge_attributes(G=g, name='weight', values={(x[1],x[0]): x[2] for x in data.values})
+    return g
 
 
 def make_chinese_whispers(data, **chinese_args):
-    g = nx.from_edgelist(data.loc[:,['variable','index']].values,create_using=nx.DiGraph)
-    nx.set_edge_attributes(G=g, name='weight', values={(x[0],x[1]): x[2] for x in data.values})
+    g = construct_weighted_graph(data)
     chinese_whispers(g, **chinese_args)
     clusters = [g.nodes[i]['label'] for i in sorted(g.nodes)]
     return clusters
@@ -208,7 +218,8 @@ def make_dataset(train, bert_target_embs, **kwargs):
         dataset={
             'data':{
                 'data':t2,
-                'target':target},
+                'target':target
+                },
              'config':{
                 'distance_name':distance_name,
                 'level_similarities':kwargs['level_similarities'],
@@ -232,82 +243,179 @@ def make_dataset(train, bert_target_embs, **kwargs):
 
 paths_config={
     'test':{
-        'active-dict':'/home/lsherstyuk/Documents/HSE_FTIAD/KR1/WSID_data/RUSSE2018/russe-wsi-kit/data/main/active-dict/test-solution.csv',
-        'bts-rnc':'/home/lsherstyuk/Documents/HSE_FTIAD/KR1/WSID_data/RUSSE2018/russe-wsi-kit/data/main/bts-rnc/test-solution.csv',
-        'wiki-wiki':'/home/lsherstyuk/Documents/HSE_FTIAD/KR1/WSID_data/RUSSE2018/russe-wsi-kit/data/main/wiki-wiki/test-solution.csv',
+        'active-dict':'./../RUSSE2018/russe-wsi-kit/data/main/active-dict/test-solution.csv',
+        'bts-rnc':'./../RUSSE2018/russe-wsi-kit/data/main/bts-rnc/test-solution.csv',
+        'wiki-wiki':'./../RUSSE2018/russe-wsi-kit/data/main/wiki-wiki/test-solution.csv',
     },
     'train':{
-        'active-dict':'/home/lsherstyuk/Documents/HSE_FTIAD/KR1/WSID_data/RUSSE2018/russe-wsi-kit/data/main/active-dict/train.csv',
-        'bts-rnc':'/home/lsherstyuk/Documents/HSE_FTIAD/KR1/WSID_data/RUSSE2018/russe-wsi-kit/data/main/bts-rnc/train.csv',
-        'wiki-wiki':'/home/lsherstyuk/Documents/HSE_FTIAD/KR1/WSID_data/RUSSE2018/russe-wsi-kit/data/main/wiki-wiki/train.csv',
+        'active-dict':'./../RUSSE2018/russe-wsi-kit/data/main/active-dict/train.csv',
+        'bts-rnc':'./../RUSSE2018/russe-wsi-kit/data/main/bts-rnc/train.csv',
+        'wiki-wiki':'./../RUSSE2018/russe-wsi-kit/data/main/wiki-wiki/train.csv',
     },
 }
 
+def run_chinese():
+    results=[]
+    bean_counter=0
+    for ds_kind, dses in paths_config.items():
+        for dataset_name,dataset_path  in dses.items():
+            print(f'{dataset_name} started')
+            train, bert_target_embs = read_data_and_compute_embeds(dataset_path)
+            for dataset_config in product_dict(**dataset_configs):
+                datasets = make_dataset(train, bert_target_embs, **dataset_config)
+                for chinese_config in product_dict(**chinese_whispers_configs):
+                    for i,d in enumerate(datasets):
+                        labels = make_chinese_whispers(d['data']['data'], **chinese_config)
+                        n_clusters=len(set(labels))
+                        score = evaluate(labels, d['data']['target'])
+                        r = {**d['config'], **chinese_config,'dataset_name':dataset_name, 'dataset_kind':ds_kind, 'word_id':i, 'n_clusters':n_clusters,'score':score}
+                        results.append(r)
+                        if (bean_counter%5000)==0:
+                            print(bean_counter)
+                        if (bean_counter%50000)==0:
+                            with open('./train_dump.pkl', 'wb') as f:
+                                pkl.dump(results, f)
+                        bean_counter+=1
+    with open('./train_dump.pkl', 'wb') as f:
+        pkl.dump(results, f)
+    train_results = pd.DataFrame(results)
+    train_results.to_pickle('train_dump_df.pkl')
+    word_ids=[]
+    dataset_names = ['active-dict','bts-rnc','wiki-wiki',]
+    for ds_kind, dses in paths_config.items():
+        for dataset_name,dataset_path  in dses.items():
+    # for ds_path, ds_name in zip(train_paths,dataset_names):
+            testing_df = pd.read_csv(dataset_path,sep='\t')
+            testing_df['dummy']=1
+            word_id_df = testing_df['word'].drop_duplicates().reset_index(drop=True).reset_index().rename(columns={'index':'word_id'})
+            word_id_df['dataset_name']=dataset_name
+            word_id_df['dataset_kind']=ds_kind
+            word_id_df=word_id_df.join(testing_df.groupby('word').agg({'dummy':['sum',lambda x: sum(x)/testing_df.shape[0]]}), on='word')
+            word_id_df.columns = ['word_id','word','dataset_name','dataset_kind','contexts_num','contexts_frac']
+            word_ids.append(word_id_df)
+    word_ids=pd.concat(word_ids,axis=0).reset_index(drop=True)
+    train_results_1=pd.merge(
+        train_results,
+        word_ids,
+        left_on=['word_id','dataset_name','dataset_kind'],
+        right_on=['word_id','dataset_name','dataset_kind'],
+        how='left')
+    train_results_1['weighted_score'] = train_results_1['score']*train_results_1['contexts_frac']
+    train_results_2 = train_results_1.groupby(['distance_name','level_similarities','normalize_embeds','k','weighting','iterations','dataset_name','dataset_kind']).agg({'n_clusters':'mean','weighted_score':'sum','contexts_num':'mean'})
+    with open('./aggregated_training_dump.pkl', 'wb') as f:
+        pkl.dump(train_results_2, f)
 
-results=[]
-bean_counter=0
-for ds_kind, dses in paths_config.items():
-    for dataset_name,dataset_path  in dses.items():
-        print(f'{dataset_name} started')
-        train, bert_target_embs = read_data_and_compute_embeds(dataset_path)
-        for dataset_config in product_dict(**dataset_configs):
-            datasets = make_dataset(train, bert_target_embs, **dataset_config)
-            for chinese_config in product_dict(**chinese_whispers_configs):
+
+def run_maxmax():
+    results=[]
+    bean_counter=0
+    for ds_kind, dses in paths_config.items():
+        for dataset_name,dataset_path  in dses.items():
+            print(f'{dataset_name} started')
+            train, bert_target_embs = read_data_and_compute_embeds(dataset_path)
+            for dataset_config in  product_dict(**dataset_configs):
+                datasets = make_dataset(train, bert_target_embs, **dataset_config)
                 for i,d in enumerate(datasets):
-                    labels = make_chinese_whispers(d['data']['data'], **chinese_config)
+                    g = construct_weighted_graph(d['data']['data'])
+                    labels = maxmax_clustering(g)
                     n_clusters=len(set(labels))
                     score = evaluate(labels, d['data']['target'])
-                    r = {**d['config'], **chinese_config,'dataset_name':dataset_name, 'dataset_kind':ds_kind, 'word_id':i, 'n_clusters':n_clusters,'score':score}
+                    r = {**d['config'],'dataset_name':dataset_name, 'dataset_kind':ds_kind, 'word_id':i, 'n_clusters':n_clusters,'score':score}
                     results.append(r)
                     if (bean_counter%5000)==0:
                         print(bean_counter)
                     if (bean_counter%50000)==0:
-                        with open('./train_dump.pkl', 'wb') as f:
+                        with open('./train_maxmax_dump.pkl', 'wb') as f:
                             pkl.dump(results, f)
                     bean_counter+=1
+    with open('./train_maxmax_dump.pkl', 'wb') as f:
+        pkl.dump(results, f)
+    train_results = pd.DataFrame(results)
+    train_results.to_pickle('train_maxmax_dump_df.pkl')
+    word_ids=[]
+    dataset_names = ['active-dict','bts-rnc','wiki-wiki',]
+    for ds_kind, dses in paths_config.items():
+        for dataset_name,dataset_path  in dses.items():
+    # for ds_path, ds_name in zip(train_paths,dataset_names):
+            testing_df = pd.read_csv(dataset_path,sep='\t')
+            testing_df['dummy']=1
+            word_id_df = testing_df['word'].drop_duplicates().reset_index(drop=True).reset_index().rename(columns={'index':'word_id'})
+            word_id_df['dataset_name']=dataset_name
+            word_id_df['dataset_kind']=ds_kind
+            word_id_df=word_id_df.join(testing_df.groupby('word').agg({'dummy':['sum',lambda x: sum(x)/testing_df.shape[0]]}), on='word')
+            word_id_df.columns = ['word_id','word','dataset_name','dataset_kind','contexts_num','contexts_frac']
+            word_ids.append(word_id_df)
+    word_ids=pd.concat(word_ids,axis=0).reset_index(drop=True)
+    train_results_1=pd.merge(
+        train_results,
+        word_ids,
+        left_on=['word_id','dataset_name','dataset_kind'],
+        right_on=['word_id','dataset_name','dataset_kind'],
+        how='left')
+    train_results_1['weighted_score'] = train_results_1['score']*train_results_1['contexts_frac']
+    train_results_2 = train_results_1.groupby(['distance_name','level_similarities','normalize_embeds','k','dataset_name','dataset_kind']).agg({'n_clusters':'mean','weighted_score':'sum','contexts_num':'mean'})
+    with open('./aggregated_maxmax_training_dump.pkl', 'wb') as f:
+        pkl.dump(train_results_2, f)
+
+
+if __name__=='__main__':
+    run_maxmax()    
 
 
 
 
-with open('./train_dump.pkl', 'wb') as f:
-    pkl.dump(results, f)
-train_results = pd.DataFrame(results)
-train_results.to_pickle('train_dump_df.pkl')
+def run_training(model_configs, make_model):
+    model_name=model_config['model_name']
+    results=[]
+    bean_counter=0
+    for ds_kind, dses in paths_config.items():
+        for dataset_name,dataset_path  in dses.items():
+            print(f'{dataset_name} started')
+            train, bert_target_embs = read_data_and_compute_embeds(dataset_path)
+            for dataset_config in product_dict(**dataset_configs):
+                datasets = make_dataset(train, bert_target_embs, **dataset_config)
+                for model_config in product_dict(**model_config):
+                    for i,d in enumerate(datasets):
+                        labels = make_model(d['data']['data'], **model_config)
+                        n_clusters=len(set(labels))
+                        score = evaluate(labels, d['data']['target'])
+                        r = {**d['config'], **model_config,'dataset_name':dataset_name, 'dataset_kind':ds_kind, 'word_id':i, 'n_clusters':n_clusters,'score':score}
+                        results.append(r)
+                        if (bean_counter%5000)==0:
+                            print(bean_counter)
+                        if (bean_counter%50000)==0:
+                            with open('./train_dump.pkl', 'wb') as f:
+                                pkl.dump(results, f)
+                        bean_counter+=1
+    with open(f'./{model_name}_train_dump.pkl', 'wb') as f:
+        pkl.dump(results, f)
+    train_results = pd.DataFrame(results)
+    train_results.to_pickle(f'./{model_name}_train_dump_df.pkl')
+    word_ids=[]
+    dataset_names = ['active-dict','bts-rnc','wiki-wiki',]
+    for ds_kind, dses in paths_config.items():
+        for dataset_name,dataset_path  in dses.items():
+    # for ds_path, ds_name in zip(train_paths,dataset_names):
+            testing_df = pd.read_csv(dataset_path,sep='\t')
+            testing_df['dummy']=1
+            word_id_df = testing_df['word'].drop_duplicates().reset_index(drop=True).reset_index().rename(columns={'index':'word_id'})
+            word_id_df['dataset_name']=dataset_name
+            word_id_df['dataset_kind']=ds_kind
+            word_id_df=word_id_df.join(testing_df.groupby('word').agg({'dummy':['sum',lambda x: sum(x)/testing_df.shape[0]]}), on='word')
+            word_id_df.columns = ['word_id','word','dataset_name','dataset_kind','contexts_num','contexts_frac']
+            word_ids.append(word_id_df)
+    word_ids=pd.concat(word_ids,axis=0).reset_index(drop=True)
+    train_results_1=pd.merge(
+        train_results,
+        word_ids,
+        left_on=['word_id','dataset_name','dataset_kind'],
+        right_on=['word_id','dataset_name','dataset_kind'],
+        how='left')
+    train_results_1['weighted_score'] = train_results_1['score']*train_results_1['contexts_frac']
 
-word_ids=[]
-dataset_names = ['active-dict','bts-rnc','wiki-wiki',]
+    train_results_2 = train_results_1.groupby(['distance_name','level_similarities','normalize_embeds']+list(model_config.keys())+['dataset_name','dataset_kind']).agg({'n_clusters':'mean','weighted_score':'sum','contexts_num':'mean'})
+    with open(f'./{model_name}_aggregated_training_dump.pkl', 'wb') as f:
+        pkl.dump(train_results_2, f)
 
-
-for ds_kind, dses in paths_config.items():
-    for dataset_name,dataset_path  in dses.items():
-# for ds_path, ds_name in zip(train_paths,dataset_names):
-        testing_df = pd.read_csv(dataset_path,sep='\t')
-        testing_df['dummy']=1
-        word_id_df = testing_df['word'].drop_duplicates().reset_index(drop=True).reset_index().rename(columns={'index':'word_id'})
-        word_id_df['dataset_name']=dataset_name
-        word_id_df['dataset_kind']=ds_kind
-        word_id_df=word_id_df.join(testing_df.groupby('word').agg({'dummy':['sum',lambda x: sum(x)/testing_df.shape[0]]}), on='word')
-        word_id_df.columns = ['word_id','word','dataset_name','dataset_kind','contexts_num','contexts_frac']
-        word_ids.append(word_id_df)
-
-
-
-word_ids=pd.concat(word_ids,axis=0).reset_index(drop=True)
-train_results_1=pd.merge(
-    train_results,
-    word_ids,
-    left_on=['word_id','dataset_name','dataset_kind'],
-    right_on=['word_id','dataset_name','dataset_kind'],
-    how='left')
-    
-
-train_results_1['weighted_score'] = train_results_1['score']*train_results_1['contexts_frac']
-train_results_2 = train_results_1.groupby(['distance_name','level_similarities','normalize_embeds','k','weighting','iterations','dataset_name','dataset_kind']).agg({'n_clusters':'mean','weighted_score':'sum','contexts_num':'mean'})
-
-
-with open('./aggregated_training_dump.pkl', 'wb') as f:
-    pkl.dump(train_results_2, f)
-
-
-# datasets
-# res = pd.concat([train.loc[ix,'gold_sense_id'].reset_index(drop=True), pd.Series(clusters)],axis=1)
+if __name__=='__main__':
+    run_training(maxmax_configs, maxmax_clustering)
