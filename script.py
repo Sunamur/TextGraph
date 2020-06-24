@@ -116,18 +116,17 @@ dataset_configs={
     'distance_config':list(zip([euclidean_distances, manhattan_distances, cosine_similarity],['euclidean_distances', 'manhattan_distances', 'cosine_similarity'], [True,True,False])),
     'level_similarities':[True,False],
     'normalize_embeds':[2,False],
-    # 'k':np.arange(2,25),
     'k':[2,3,4,5,6,8,10,15],
 }
 
 chinese_whispers_configs={
     'weighting':['top','lin','log'],
     'iterations':[5,10,20,30,50],
-    'algorithm':'ChineseWhispers'
+    'model_name':['ChineseWhispers']
 }
 
 maxmax_configs = {
-    'algorithm':'ChineseWhispers'
+    'model_name':['maxmax']
 }
 
 def clear_punctuation(x):
@@ -161,7 +160,7 @@ def read_data_and_compute_embeds(path_to_train):
     assert bert_tokens.shape[0]==train.shape[0]
     bert_out_1 = pd.concat([bert_out,train['target_word'].apply(lambda x: x[0])],axis=1)
     bert_out_1['bert_target_embs'] = bert_out_1.apply(find_target_embed,axis=1)
-    print(f'dropped {bert_target_embs.isna().sum()} instances: {bert_target_embs[bert_target_embs.isna()].index}')
+    print(f"dropped {bert_out_1['bert_target_embs'].isna().sum()} instances: {bert_out_1.loc[bert_out_1['bert_target_embs'].isna()].index}")
     train = train.loc[bert_out_1['bert_target_embs'].notna()]
     bert_out_1 = bert_out_1.loc[bert_out_1['bert_target_embs'].notna()]
     return train, bert_out_1
@@ -362,7 +361,7 @@ def run_maxmax():
 
 
 def run_training(model_configs, make_model):
-    model_name=model_config['model_name']
+    model_name=model_configs['model_name']
     results=[]
     bean_counter=0
     for ds_kind, dses in paths_config.items():
@@ -371,7 +370,7 @@ def run_training(model_configs, make_model):
             train, bert_target_embs = read_data_and_compute_embeds(dataset_path)
             for dataset_config in product_dict(**dataset_configs):
                 datasets = make_dataset(train, bert_target_embs, **dataset_config)
-                for model_config in product_dict(**model_config):
+                for model_config in product_dict(**model_configs):
                     for i,d in enumerate(datasets):
                         labels = make_model(d['data']['data'], **model_config)
                         n_clusters=len(set(labels))
@@ -410,10 +409,10 @@ def run_training(model_configs, make_model):
         how='left')
     train_results_1['weighted_score'] = train_results_1['score']*train_results_1['contexts_frac']
 
-    train_results_2 = train_results_1.groupby(['distance_name','level_similarities','normalize_embeds']+list(model_config.keys())+['dataset_name','dataset_kind']).agg({'n_clusters':'mean','weighted_score':'sum','contexts_num':'mean'})
+    train_results_2 = train_results_1.groupby(list(dataset_configs.keys())+list(model_config.keys())+['dataset_name','dataset_kind']).agg({'n_clusters':'mean','weighted_score':'sum','contexts_num':'mean'})
     with open(f'./{model_name}_aggregated_training_dump.pkl', 'wb') as f:
         pkl.dump(train_results_2, f)
 
 if __name__=='__main__':
     # run_training(maxmax_configs, maxmax_clustering)
-    run_training({'algorithm':'label_prop', asyn_lpa_communities})
+    run_training({'model_name':['label_prop']}, asyn_lpa_communities)
