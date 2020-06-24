@@ -4,7 +4,7 @@ from chinese_whispers import chinese_whispers, aggregate_clusters
 import networkx as nx
 from sklearn.metrics import adjusted_rand_score as ari
 import seaborn as sns
-from sklearn.metrics.pairwise import euclidean_distances, manhattan_distances, cosine_similarity
+from sklearn.metrics.pairwise import euclidean_distances, manhattan_distances, cosine_similarity,cosine_distances
 
 
 
@@ -113,7 +113,7 @@ def product_dict(**kwargs):
         yield dict(zip(keys, instance))
 
 dataset_configs={
-    'distance_config':list(zip([euclidean_distances, manhattan_distances, cosine_similarity],['euclidean_distances', 'manhattan_distances', 'cosine_similarity'], [True,True,False])),
+    'distance_config':list(zip([euclidean_distances, manhattan_distances, cosine_distances],['euclidean_distances', 'manhattan_distances', 'cosine_distances'])),
     'level_similarities':[True,False],
     'normalize_embeds':[2,False],
     'k':[2,3,4,5,6,8,10,15],
@@ -166,6 +166,17 @@ def read_data_and_compute_embeds(path_to_train):
     return train, bert_out_1
 
 
+def find_marginal_distance(l1,l2, distance_func=cosine_similarity):
+    b1=list(itertools.chain(*[x for x in l1]))
+    ar1 = np.stack(b1)
+    b2=list(itertools.chain(*[x for x in l2]))
+    ar2 = np.stack(b2)
+    dis = distance_func(ar1,ar2)
+    
+    
+    # if normalize:
+    #     dis = (dis-dis.min())/(dis.max()-dis.min())
+    return dis.min()
 
 
 
@@ -203,10 +214,10 @@ def evaluate(pred, target):
     return ari(pred, target)
 
 
-def make_dataset(train, bert_out, **kwargs):
+def make_dataset_from_target_word(train, bert_out, **kwargs):
     bert_target_embs = bert_out['bert_target_embs']
     datasets=[]
-    distance, distance_name, less_is_closer = kwargs['distance_config']
+    distance, distance_name = kwargs['distance_config']
     for word in train['word'].unique():
         ix = np.array(train.loc[train['word']==word].index)
         btes = bert_target_embs.loc[ix]
@@ -215,8 +226,7 @@ def make_dataset(train, bert_out, **kwargs):
         else:
             data = btes.apply(pd.Series)
         t = pd.DataFrame(distance(data))
-        if less_is_closer:
-            t=(-t + t.max().max())/t.max().max()
+        t=(-t + t.max().max())/t.max().max()
         t1=t.apply(find_knn, k=min(kwargs['k'], t.shape[0]-1),less_is_closer=False)
         t1=t1.reset_index().melt('index')
         if kwargs['level_similarities']:
@@ -238,7 +248,43 @@ def make_dataset(train, bert_out, **kwargs):
         datasets.append(dataset)
     return datasets
         
+def make_dataset_from_minimal_context(train, bert_out, **kwargs):
+    # bert_target_embs = bert_out['bert_target_embs']
+    token_embeds = bert_out['token_embs']
+    datasets=[]
+    distance, distance_name = kwargs['distance_config']
+    for word in train['word'].unique():
+        ix = np.array(train.loc[train['word']==word].index)
+        embs = token_embeds.loc[ix]
 
+        data = pd.DataFrame(np.zeros((embs.shape[0],embs.shape[0],)))
+        for i1 in range(embs.shape[0]):
+            for i2 in range(embs.shape[0]):
+                data.iloc[i1,i2]=find_marginal_distance(embs.iloc[i1],embs.iloc[i2], distance_func=distance, normalize=kwargs['normalize_embs'])
+        data = max(1,data.max().max())-data
+        if kwargs['normalize_embeds']:
+            data = (data.T/(data.applymap(lambda x: x**kwargs['normalize_embeds'])).sum(axis=1)).T
+        t1=data.apply(find_knn, k=min(kwargs['k'], data.shape[0]-1),less_is_closer=False)
+        t1=t1.reset_index().melt('index')
+        if kwargs['level_similarities']:
+            t1.loc[t1['value']>0,'value']=1
+        t2=t1.loc[(t1['value']>0)&(t1['index']!=t1['variable'])]
+        target=train.loc[ix,'gold_sense_id'].reset_index(drop=True)
+        dataset={
+            'data':{
+                'data':t2,
+                'target':target
+                },
+             'config':{
+                'distance_name':distance_name,
+                'level_similarities':kwargs['level_similarities'],
+                'normalize_embeds':kwargs['normalize_embeds'],
+                'k':kwargs['k']
+                }
+            }
+        datasets.append(dataset)
+    return datasets
+        
 
 paths_config={
     'test':{
@@ -303,8 +349,6 @@ def run_chinese():
     train_results_2 = train_results_1.groupby(['distance_name','level_similarities','normalize_embeds','k','weighting','iterations','dataset_name','dataset_kind']).agg({'n_clusters':'mean','weighted_score':'sum','contexts_num':'mean'})
     with open('./aggregated_training_dump.pkl', 'wb') as f:
         pkl.dump(train_results_2, f)
-
-
 def run_maxmax():
     results=[]
     bean_counter=0
@@ -359,8 +403,7 @@ def run_maxmax():
 
 
 
-
-def run_training(model_configs, make_model):
+def run_training(model_configs, make_model, make_dataset):
     model_name=model_configs['model_name']
     results=[]
     bean_counter=0
@@ -414,5 +457,7 @@ def run_training(model_configs, make_model):
         pkl.dump(train_results_2, f)
 
 if __name__=='__main__':
-    # run_training(maxmax_configs, maxmax_clustering)
-    run_training({'model_name':['label_prop']}, asyn_lpa_communities)
+    run_training({'model_name':['maxmax_min_context']}, maxmax_clustering, make_dataset_from_minimal_context)    
+    run_training({'model_name':['maxmax_target_word']}, maxmax_clustering, make_dataset_from_target_word)    
+    run_training({'model_name':['label_prop_min_context']}, asyn_lpa_communities,make_dataset_from_minimal_context)
+    run_training({'model_name':['label_prop_target_word']}, asyn_lpa_communities,make_dataset_from_target_word)
