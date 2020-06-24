@@ -28,7 +28,6 @@ from sklearn.metrics import adjusted_rand_score, adjusted_mutual_info_score
 from nltk import word_tokenize
 import re
 from tqdm import tqdm, tqdm_pandas
-from maxmax import maxmax_clustering    
 
 
 tqdm_pandas(tqdm())
@@ -199,6 +198,23 @@ def make_chinese_whispers(data, **kwargs):
     clusters = [g.nodes[i]['label'] for i in sorted(g.nodes)]
     return clusters
 
+def maxmax_clustering(data, **kwargs):
+    graph=construct_weighted_graph(data)
+
+    surviving_edges=[]
+    for i in graph.nodes:
+        sorted_edges=sorted([[x[1],x[2]['weight']] for x in graph.out_edges(i,data=True)],key=lambda x: x[1],reverse=True)
+        surviving_edges.append((sorted_edges[0][0], i))
+    g = nx.from_edgelist(surviving_edges, create_using=nx.DiGraph)
+    nx.set_node_attributes(g, {x:True for x in g.nodes}, 'root')
+    for i in g.nodes:
+        if g.nodes[i]['root']:
+            nx.set_node_attributes(g, {x:False for x in nx.descendants(g, i)}, 'root')
+    root_nodes = [x for x in g.nodes if g.nodes[x]['root']]
+    clusters = {x:root for root in root_nodes for x in nx.descendants(g,root)}
+    clusters.update({x:x for x in root_nodes})
+    clusters_list= [y[1] for y in  sorted(list(clusters.items()),key = lambda x: x[0])]
+    return clusters_list
 
 
 def asyn_lpa_communities(data, **kwargs):
@@ -260,7 +276,7 @@ def make_dataset_from_minimal_context(train, bert_out, **kwargs):
         data = pd.DataFrame(np.zeros((embs.shape[0],embs.shape[0],)))
         for i1 in range(embs.shape[0]):
             for i2 in range(embs.shape[0]):
-                data.iloc[i1,i2]=find_marginal_distance(embs.iloc[i1],embs.iloc[i2], distance_func=distance, normalize=kwargs['normalize_embs'])
+                data.iloc[i1,i2]=find_marginal_distance(embs.iloc[i1],embs.iloc[i2], distance_func=distance)
         data = max(1,data.max().max())-data
         if kwargs['normalize_embeds']:
             data = (data.T/(data.applymap(lambda x: x**kwargs['normalize_embeds'])).sum(axis=1)).T
