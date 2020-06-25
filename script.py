@@ -111,8 +111,35 @@ def product_dict(**kwargs):
     for instance in itertools.product(*vals):
         yield dict(zip(keys, instance))
 
+
+
+
+
+
+import torch
+def cosine_distance(x1, x2=None, eps=1e-8):
+    x1 = torch.from_numpy(x1).float()
+    x2 = torch.from_numpy(x2).float()
+    w1 = x1.norm(p=2, dim=1, keepdim=True)
+    w2 = w1 if x2 is x1 else x2.norm(p=2, dim=1, keepdim=True)
+    return (1 - torch.mm(x1, x2.t()) / (w1 * w2.t()).clamp(min=eps)).numpy()
+def euclidean_distance(x1,x2):
+    x1 = torch.from_numpy(x1).float()
+    x2 = torch.from_numpy(x2).float()
+    return torch.dist(x, y, 2).numpy()
+def manhattan_distance(x1,x2):
+    x1 = torch.from_numpy(x1).float()
+    x2 = torch.from_numpy(x2).float()
+    return torch.dist(x, y, 2).numpy()
+
+
+if torch.cuda.is_available():
+    dist_funcs=[euclidean_distance, manhattan_distance, cosine_distance]
+else:
+    dist_funcs=[euclidean_distances, manhattan_distances, cosine_distances]
+
 dataset_configs={
-    'distance_config':list(zip([euclidean_distances, manhattan_distances, cosine_distances],['euclidean_distances', 'manhattan_distances', 'cosine_distances'])),
+    'distance_config':list(zip(dist_funcs,['euclidean_distances', 'manhattan_distances', 'cosine_distances'])),
     'level_similarities':[True,False],
     'normalize_embeds':[2,False],
     'k':[2,3,4,5,6,8,10,15],
