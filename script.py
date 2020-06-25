@@ -28,6 +28,24 @@ from sklearn.metrics import adjusted_rand_score, adjusted_mutual_info_score
 from nltk import word_tokenize
 import re
 from tqdm import tqdm, tqdm_pandas
+import logging
+
+logger = logging.getLogger('app')
+logger.setLevel(logging.DEBUG)
+# create file handler which logs even debug messages
+fh = logging.FileHandler('full_script.log')
+fh.setLevel(logging.DEBUG)
+# create console handler with a higher log level
+# create formatter and add it to the handlers
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+fh.setFormatter(formatter)
+# add the handlers to the logger
+logger.addHandler(fh)
+# consoleHandler = logging.StreamHandler()
+# consoleHandler.setFormatter(formatter)
+# logger.addHandler(consoleHandler)
+
+
 
 
 tqdm_pandas(tqdm())
@@ -436,6 +454,7 @@ def run_training(model_configs, make_model, make_dataset):
                         score = evaluate(labels, d['data']['target'])
                         r = {**d['config'], **model_config,'dataset_name':dataset_name, 'dataset_kind':ds_kind, 'word_id':i, 'n_clusters':n_clusters,'score':score}
                         results.append(r)
+                        logger.debug(str(r))
                         if (bean_counter%5000)==0:
                             print(bean_counter)
                         if (bean_counter%50000)==0:
